@@ -1,6 +1,61 @@
 from random import choices, shuffle
 from os import system, name
+import functions
+import getpass
+import os
+import pprint
+import requests
+import sys
+import json
 
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
+from langchain.callbacks.tracers import ConsoleCallbackHandler
+from langchain.chat_models import ChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.llms import HuggingFacePipeline
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain.document_loaders import TextLoader
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import MongoDBAtlasVectorSearch
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, AutoConfig
+from sentence_transformers import SentenceTransformer
+from openai import ChatCompletion
+from openai import OpenAI
+
+print("Enter In OpenAI API key: ")
+os.environ["OPENAI_API_KEY"] = getpass.getpass()
+print("Enter In MongoDB URI: ")
+os.environ["MONGO_URI"] = getpass.getpass()
+#mongo client/ cluster setup + vector_index setup
+
+
+
+try:
+    cluster = MongoClient(os.environ["MONGO_URI"])
+    print("MongoDB connection established.")
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {e}")
+    
+try:
+    OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+    print("OpenAI API initialized.")
+except Exception as e:
+    print(f"Failed to initialize OpenAI API: {e}")
+    
+client = OpenAI()
+DB_NAME = "blackrag"
+COLLECTION_NAME = "blackjack"
+MONGODB_COLLECTION = cluster[DB_NAME][COLLECTION_NAME]
+vector_search_index = "vector_index"
+
+#####################EOR#######################
+#############End of RagJack####################
 SUITS = ("Hearts", "Diamonds", "Spades", "Clubs")
 RANKS = (
     "Two",
@@ -249,7 +304,7 @@ def clear_screen():
 def greet():
     print(" " + "".center(40, "_"), "|" + "".center(40, " ") + "|", sep="\n")
     print(
-        "|" + "HaNd Of BLaCk_JaCk".center(40, " ") + "|",
+        "|" + "BLACK JACK !".center(40, " ") + "|",
         "|" + "".center(40, "_") + "|",
         sep="\n",
     )
@@ -287,6 +342,7 @@ def main():
     p_win, d_win, draw = 0, 0, 0
     greet()
     p_chips = Chips()
+
     while True:
         cards_deck = Deck()
         cards_deck.shuffle()
@@ -297,10 +353,48 @@ def main():
         bet_money = int(input(" Enter Bet amount : "))
         p_chips.bet = take_bet(bet_money, p_chips.total)
         print("\n")
-
         show_some(p_cards, d_cards, p_hand)
         global PLAYING
         while PLAYING:  # Recall var. from hit and stand function
+            #response is what the AI believes to be the best play for the shown d_card and the players hand and chips
+            
+            
+            
+            print("Big Dog is Thinking...\n")
+            prompt = f""" The player's blackjack hand consists of {p_cards[0]} and {p_cards[1]}. This is a total of {p_hand.value}. 
+            The dealer's shown card is {d_cards[1]}. Finally the player's total chip count is {p_chips.total} .
+            Based on the player's hand and the dealer's card, say in 1 word what the best option for their hand would be. Options for actions = ['Hit','Stand','Double Down','Fold']
+            If you don't know the answer, just say that you don't know.
+            """
+
+            vectorstore = MongoDBAtlasVectorSearch(
+                MONGODB_COLLECTION,
+                OpenAIEmbeddings(),
+                index_name = "vector_index"
+                )
+            
+            sourced_info = vectorstore.similarity_search(prompt, k=1)
+            sourced_info
+            #Uncomment two lines below to show sourced info and embeddings
+            #print("\n+++DEBUG+++\n")
+            #print(sourced_info)
+            
+            combined_information = f""" 
+            Original Input: {prompt}\n\n Answer Query With Search Results From Here: {sourced_info} . \n
+            """
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a professional Blackjack player, named Big Dog, coaching someone who doesn't know what to do with their hand."},
+                    {"role": "user", "content": combined_information}
+                ],
+                temperature = 0.3
+            )
+
+            
+
+            
+            print(response.choices[0].message.content)
             blackj_options(p_chips, cards_deck, p_hand, d_cards)
             if player_bust(p_hand, p_chips):
                 d_win += 1
